@@ -1,5 +1,5 @@
 [package]
-name = "smith-normal-form"
+name = "homology"
 version = "0.1.0"
 edition = "2024"
 

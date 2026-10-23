@@ -1,4 +1,5 @@
-mod smith;
+pub mod homology;
+pub mod smith;
 
 use num_bigint::BigInt;
 use smith::{Matrix, multiply, smith_normal_form};
