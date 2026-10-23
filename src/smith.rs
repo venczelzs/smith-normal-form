@@ -100,25 +100,39 @@ pub fn smith_normal_form(a: &[Vec<BigInt>]) -> SmithNormalForm {
 }
 
 /// Ordinary matrix product, handy for checking `left * a * right`.
+/// Implemented using straightforward triple-nested loops familiar in C/C++.
 pub fn multiply(a: &[Vec<BigInt>], b: &[Vec<BigInt>]) -> Matrix {
-    let inner = b.len();
-    let cols = b.first().map_or(0, Vec::len);
+    let rows_a = a.len();
+    let cols_a = if rows_a > 0 { a[0].len() } else { 0 };
+    let rows_b = b.len();
+    let cols_b = if rows_b > 0 { b[0].len() } else { 0 };
+
     assert!(
-        a.iter().all(|row| row.len() == inner),
+        cols_a == rows_b,
         "inner dimensions must agree"
     );
+    assert!(
+        a.iter().all(|row| row.len() == cols_a),
+        "all rows in matrix A must have equal length"
+    );
+    assert!(
+        b.iter().all(|row| row.len() == cols_b),
+        "all rows in matrix B must have equal length"
+    );
 
-    a.iter()
-        .map(|row| {
-            (0..cols)
-                .map(|j| {
-                    (0..inner)
-                        .map(|k| &row[k] * &b[k][j])
-                        .fold(BigInt::zero(), |acc, x| acc + x)
-                })
-                .collect()
-        })
-        .collect()
+    let mut result = vec![vec![BigInt::zero(); cols_b]; rows_a];
+
+    for i in 0..rows_a {
+        for j in 0..cols_b {
+            let mut sum = BigInt::zero();
+            for k in 0..rows_b {
+                sum += &a[i][k] * &b[k][j];
+            }
+            result[i][j] = sum;
+        }
+    }
+
+    result
 }
 
 /// Brings a smallest-magnitude nonzero entry of the submatrix starting at
@@ -189,13 +203,11 @@ fn find_entry_not_divisible_by_pivot(d: &Matrix, t: usize) -> Option<usize> {
 }
 
 fn identity(n: usize) -> Matrix {
-    (0..n)
-        .map(|i| {
-            (0..n)
-                .map(|j| if i == j { BigInt::one() } else { BigInt::zero() })
-                .collect()
-        })
-        .collect()
+    let mut mat = vec![vec![BigInt::zero(); n]; n];
+    for i in 0..n {
+        mat[i][i] = BigInt::one();
+    }
+    mat
 }
 
 fn swap_rows(d: &mut Matrix, left: &mut Matrix, i: usize, j: usize) {
