@@ -7,13 +7,16 @@
 
 use std::cmp::min;
 
-pub type Matrix = Vec<Vec<i64>>;
+use num_bigint::BigInt;
+use num_traits::{One, Signed, Zero};
+
+pub type Matrix = Vec<Vec<BigInt>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SmithNormalForm {
     /// The invariant factors `d_1 | d_2 | ... | d_r`, all strictly positive.
     /// Their count is the rank of the matrix.
-    pub invariant_factors: Vec<i64>,
+    pub invariant_factors: Vec<BigInt>,
     /// Unimodular left transform, `rows x rows`.
     pub left: Matrix,
     /// Unimodular right transform, `cols x cols`.
@@ -29,9 +32,9 @@ impl SmithNormalForm {
 
     /// The diagonal form `D` itself, as a full `rows x cols` matrix.
     pub fn diagonal(&self) -> Matrix {
-        let mut d = vec![vec![0; self.cols]; self.rows];
-        for (i, &factor) in self.invariant_factors.iter().enumerate() {
-            d[i][i] = factor;
+        let mut d = vec![vec![BigInt::zero(); self.cols]; self.rows];
+        for (i, factor) in self.invariant_factors.iter().enumerate() {
+            d[i][i] = factor.clone();
         }
         d
     }
@@ -44,9 +47,8 @@ impl SmithNormalForm {
 ///
 /// The algorithm is the classic row/column Euclidean reduction. It always
 /// pivots on a smallest-magnitude entry, which keeps intermediate growth
-/// modest, but arithmetic is `i64` and is not overflow-checked: matrices with
-/// large entries and large dimensions can still overflow.
-pub fn smith_normal_form(a: &[Vec<i64>]) -> SmithNormalForm {
+/// modest, and uses arbitrary-precision integers (`BigInt`) to prevent overflow.
+pub fn smith_normal_form(a: &[Vec<BigInt>]) -> SmithNormalForm {
     let rows = a.len();
     let cols = a.first().map_or(0, Vec::len);
     assert!(
@@ -69,8 +71,8 @@ pub fn smith_normal_form(a: &[Vec<i64>]) -> SmithNormalForm {
 
             // A column swap while clearing the row can refill the column, and
             // vice versa, so keep going until both are clean.
-            let cleared = (t + 1..rows).all(|i| d[i][t] == 0)
-                && (t + 1..cols).all(|j| d[t][j] == 0);
+            let cleared = (t + 1..rows).all(|i| d[i][t].is_zero())
+                && (t + 1..cols).all(|j| d[t][j].is_zero());
             if !cleared {
                 continue;
             }
@@ -79,26 +81,26 @@ pub fn smith_normal_form(a: &[Vec<i64>]) -> SmithNormalForm {
             // the divisibility chain would fail. Folding an offending row into
             // the pivot row lets the next pass shrink the pivot to a gcd.
             match find_entry_not_divisible_by_pivot(&d, t) {
-                Some(i) => add_row_multiple(&mut d, &mut left, t, i, 1),
+                Some(i) => add_row_multiple(&mut d, &mut left, t, i, &BigInt::one()),
                 None => break,
             }
         }
 
-        if d[t][t] < 0 {
+        if d[t][t].is_negative() {
             negate_row(&mut d, &mut left, t);
         }
     }
 
     let invariant_factors = (0..min(rows, cols))
-        .map(|i| d[i][i])
-        .take_while(|&factor| factor != 0)
+        .map(|i| d[i][i].clone())
+        .take_while(|factor| !factor.is_zero())
         .collect();
 
     SmithNormalForm { invariant_factors, left, right, rows, cols }
 }
 
 /// Ordinary matrix product, handy for checking `left * a * right`.
-pub fn multiply(a: &[Vec<i64>], b: &[Vec<i64>]) -> Matrix {
+pub fn multiply(a: &[Vec<BigInt>], b: &[Vec<BigInt>]) -> Matrix {
     let inner = b.len();
     let cols = b.first().map_or(0, Vec::len);
     assert!(
@@ -109,7 +111,11 @@ pub fn multiply(a: &[Vec<i64>], b: &[Vec<i64>]) -> Matrix {
     a.iter()
         .map(|row| {
             (0..cols)
-                .map(|j| (0..inner).map(|k| row[k] * b[k][j]).sum())
+                .map(|j| {
+                    (0..inner)
+                        .map(|k| &row[k] * &b[k][j])
+                        .fold(BigInt::zero(), |acc, x| acc + x)
+                })
                 .collect()
         })
         .collect()
@@ -129,8 +135,8 @@ fn move_smallest_nonzero_to_pivot(
     let mut best: Option<(usize, usize)> = None;
     for i in t..rows {
         for j in t..cols {
-            if d[i][j] != 0
-                && best.is_none_or(|(bi, bj)| d[i][j].abs() < d[bi][bj].abs())
+            if !d[i][j].is_zero()
+                && best.as_ref().is_none_or(|&(bi, bj)| d[i][j].abs() < d[bi][bj].abs())
             {
                 best = Some((i, j));
             }
@@ -150,10 +156,10 @@ fn move_smallest_nonzero_to_pivot(
 /// Zeroes column `t` below the pivot by repeated division with remainder.
 fn clear_column_below_pivot(d: &mut Matrix, left: &mut Matrix, t: usize) {
     for i in t + 1..d.len() {
-        while d[i][t] != 0 {
-            let quotient = d[i][t] / d[t][t];
-            add_row_multiple(d, left, i, t, -quotient);
-            if d[i][t] != 0 {
+        while !d[i][t].is_zero() {
+            let quotient = &d[i][t] / &d[t][t];
+            add_row_multiple(d, left, i, t, &-quotient);
+            if !d[i][t].is_zero() {
                 // The remainder is smaller than the pivot: promote it and
                 // continue the Euclidean algorithm.
                 swap_rows(d, left, t, i);
@@ -165,10 +171,10 @@ fn clear_column_below_pivot(d: &mut Matrix, left: &mut Matrix, t: usize) {
 /// Zeroes row `t` to the right of the pivot, mirroring `clear_column_below_pivot`.
 fn clear_row_right_of_pivot(d: &mut Matrix, right: &mut Matrix, t: usize) {
     for j in t + 1..d[0].len() {
-        while d[t][j] != 0 {
-            let quotient = d[t][j] / d[t][t];
-            add_col_multiple(d, right, j, t, -quotient);
-            if d[t][j] != 0 {
+        while !d[t][j].is_zero() {
+            let quotient = &d[t][j] / &d[t][t];
+            add_col_multiple(d, right, j, t, &-quotient);
+            if !d[t][j].is_zero() {
                 swap_cols(d, right, t, j);
             }
         }
@@ -178,13 +184,17 @@ fn clear_row_right_of_pivot(d: &mut Matrix, right: &mut Matrix, t: usize) {
 /// Finds a row of the remaining submatrix holding an entry the pivot does not
 /// divide.
 fn find_entry_not_divisible_by_pivot(d: &Matrix, t: usize) -> Option<usize> {
-    let pivot = d[t][t];
-    (t + 1..d.len()).find(|&i| (t + 1..d[0].len()).any(|j| d[i][j] % pivot != 0))
+    let pivot = &d[t][t];
+    (t + 1..d.len()).find(|&i| (t + 1..d[0].len()).any(|j| !(&d[i][j] % pivot).is_zero()))
 }
 
 fn identity(n: usize) -> Matrix {
     (0..n)
-        .map(|i| (0..n).map(|j| i64::from(i == j)).collect())
+        .map(|i| {
+            (0..n)
+                .map(|j| if i == j { BigInt::one() } else { BigInt::zero() })
+                .collect()
+        })
         .collect()
 }
 
@@ -208,12 +218,12 @@ fn add_row_multiple(
     left: &mut Matrix,
     target: usize,
     source: usize,
-    factor: i64,
+    factor: &BigInt,
 ) {
     for m in [d, left] {
         for k in 0..m[source].len() {
-            let value = m[source][k];
-            m[target][k] += factor * value;
+            let term = factor * &m[source][k];
+            m[target][k] += term;
         }
     }
 }
@@ -224,11 +234,12 @@ fn add_col_multiple(
     right: &mut Matrix,
     target: usize,
     source: usize,
-    factor: i64,
+    factor: &BigInt,
 ) {
     for m in [d, right] {
         for row in m.iter_mut() {
-            row[target] += factor * row[source];
+            let term = factor * &row[source];
+            row[target] += term;
         }
     }
 }
@@ -236,7 +247,7 @@ fn add_col_multiple(
 fn negate_row(d: &mut Matrix, left: &mut Matrix, i: usize) {
     for m in [d, left] {
         for value in m[i].iter_mut() {
-            *value = -*value;
+            *value = -&*value;
         }
     }
 }
@@ -245,31 +256,41 @@ fn negate_row(d: &mut Matrix, left: &mut Matrix, i: usize) {
 mod tests {
     use super::*;
 
+    fn mat(a: &[&[i64]]) -> Matrix {
+        a.iter()
+            .map(|row| row.iter().copied().map(BigInt::from).collect())
+            .collect()
+    }
+
+    fn factors(f: &[i64]) -> Vec<BigInt> {
+        f.iter().copied().map(BigInt::from).collect()
+    }
+
     /// Checks the defining properties: `left * a * right` is the diagonal form,
     /// the transforms are unimodular, and the factors form a divisibility chain.
-    fn check(a: &[Vec<i64>]) -> SmithNormalForm {
+    fn check(a: &[Vec<BigInt>]) -> SmithNormalForm {
         let snf = smith_normal_form(a);
         assert_eq!(
             multiply(&multiply(&snf.left, a), &snf.right),
             snf.diagonal(),
             "left * a * right != diagonal"
         );
-        assert_eq!(determinant(&snf.left).abs(), 1, "left is not unimodular");
-        assert_eq!(determinant(&snf.right).abs(), 1, "right is not unimodular");
+        assert_eq!(determinant(&snf.left).abs(), BigInt::one(), "left is not unimodular");
+        assert_eq!(determinant(&snf.right).abs(), BigInt::one(), "right is not unimodular");
         for factor in &snf.invariant_factors {
-            assert!(*factor > 0, "invariant factors must be positive");
+            assert!(factor.is_positive(), "invariant factors must be positive");
         }
         for pair in snf.invariant_factors.windows(2) {
-            assert_eq!(pair[1] % pair[0], 0, "divisibility chain broken: {pair:?}");
+            assert_eq!(&pair[1] % &pair[0], BigInt::zero(), "divisibility chain broken: {pair:?}");
         }
         snf
     }
 
     /// Cofactor expansion; only used on the small matrices in these tests.
-    fn determinant(m: &Matrix) -> i64 {
+    fn determinant(m: &Matrix) -> BigInt {
         match m.len() {
-            0 => 1,
-            1 => m[0][0],
+            0 => BigInt::one(),
+            1 => m[0][0].clone(),
             n => (0..n)
                 .map(|j| {
                     let minor: Matrix = m[1..]
@@ -278,44 +299,44 @@ mod tests {
                             row.iter()
                                 .enumerate()
                                 .filter(|(k, _)| *k != j)
-                                .map(|(_, &value)| value)
+                                .map(|(_, value)| value.clone())
                                 .collect()
                         })
                         .collect();
-                    let sign = if j % 2 == 0 { 1 } else { -1 };
-                    sign * m[0][j] * determinant(&minor)
+                    let sign = if j % 2 == 0 { BigInt::one() } else { -BigInt::one() };
+                    sign * &m[0][j] * determinant(&minor)
                 })
-                .sum(),
+                .fold(BigInt::zero(), |acc, x| acc + x),
         }
     }
 
     #[test]
     fn classic_example() {
-        let a = vec![
-            vec![2, 4, 4],
-            vec![-6, 6, 12],
-            vec![10, -4, -16],
-        ];
-        assert_eq!(check(&a).invariant_factors, vec![2, 6, 12]);
+        let a = mat(&[
+            &[2, 4, 4],
+            &[-6, 6, 12],
+            &[10, -4, -16],
+        ]);
+        assert_eq!(check(&a).invariant_factors, factors(&[2, 6, 12]));
     }
 
     #[test]
     fn already_diagonal_but_not_a_chain() {
-        let a = vec![vec![2, 0], vec![0, 3]];
-        assert_eq!(check(&a).invariant_factors, vec![1, 6]);
+        let a = mat(&[&[2, 0], &[0, 3]]);
+        assert_eq!(check(&a).invariant_factors, factors(&[1, 6]));
     }
 
     #[test]
     fn identity_is_its_own_normal_form() {
         let a = identity(4);
         let snf = check(&a);
-        assert_eq!(snf.invariant_factors, vec![1, 1, 1, 1]);
+        assert_eq!(snf.invariant_factors, factors(&[1, 1, 1, 1]));
         assert_eq!(snf.diagonal(), a);
     }
 
     #[test]
     fn zero_matrix_has_no_invariant_factors() {
-        let snf = check(&vec![vec![0; 3]; 2]);
+        let snf = check(&vec![vec![BigInt::zero(); 3]; 2]);
         assert!(snf.invariant_factors.is_empty());
         assert_eq!(snf.rank(), 0);
     }
@@ -323,40 +344,59 @@ mod tests {
     #[test]
     fn rank_deficient_wide_matrix() {
         // Every row is a multiple of the first, so the rank is 1.
-        let a = vec![
-            vec![1, 2, 3, 4],
-            vec![2, 4, 6, 8],
-            vec![3, 6, 9, 12],
-        ];
+        let a = mat(&[
+            &[1, 2, 3, 4],
+            &[2, 4, 6, 8],
+            &[3, 6, 9, 12],
+        ]);
         let snf = check(&a);
         assert_eq!(snf.rank(), 1);
-        assert_eq!(snf.invariant_factors, vec![1]);
+        assert_eq!(snf.invariant_factors, factors(&[1]));
     }
 
     #[test]
     fn tall_matrix() {
-        let a = vec![vec![4, 6], vec![6, 9], vec![0, 2]];
+        let a = mat(&[&[4, 6], &[6, 9], &[0, 2]]);
         let snf = check(&a);
         assert_eq!(snf.rows, 3);
         assert_eq!(snf.cols, 2);
         // gcd of the entries is 1; gcd of the 2x2 minors (0, 8, 12) is 4.
-        assert_eq!(snf.invariant_factors, vec![1, 4]);
+        assert_eq!(snf.invariant_factors, factors(&[1, 4]));
     }
 
     #[test]
     fn negative_entries_yield_positive_factors() {
-        let a = vec![vec![-1, 0], vec![0, -1]];
-        assert_eq!(check(&a).invariant_factors, vec![1, 1]);
+        let a = mat(&[&[-1, 0], &[0, -1]]);
+        assert_eq!(check(&a).invariant_factors, factors(&[1, 1]));
     }
 
     #[test]
     fn singular_matrix_with_repeated_factor() {
+        let a = mat(&[
+            &[9, 0, 0],
+            &[0, 4, 0],
+            &[0, 0, 0],
+        ]);
+        assert_eq!(check(&a).invariant_factors, factors(&[1, 36]));
+    }
+
+    #[test]
+    fn large_numbers_beyond_i64() {
+        use std::str::FromStr;
+
+        let val1 = BigInt::from_str("1000000000000000000000000000000").unwrap();
+        let val2 = BigInt::from_str("2000000000000000000000000000000").unwrap();
+        let val3 = BigInt::from_str("3000000000000000000000000000000").unwrap();
+        let val4 = BigInt::from_str("4000000000000000000000000000000").unwrap();
+
         let a = vec![
-            vec![9, 0, 0],
-            vec![0, 4, 0],
-            vec![0, 0, 0],
+            vec![val1.clone(), val2.clone()],
+            vec![val3.clone(), val4.clone()],
         ];
-        assert_eq!(check(&a).invariant_factors, vec![1, 36]);
+        let snf = check(&a);
+        assert_eq!(snf.rank(), 2);
+        assert_eq!(snf.invariant_factors[0], val1);
+        assert_eq!(snf.invariant_factors[1], val2);
     }
 
     #[test]
@@ -370,6 +410,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "same length")]
     fn ragged_input_panics() {
-        smith_normal_form(&[vec![1, 2], vec![3]]);
+        smith_normal_form(&[vec![BigInt::from(1), BigInt::from(2)], vec![BigInt::from(3)]]);
     }
 }

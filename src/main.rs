@@ -1,12 +1,13 @@
 mod smith;
 
+use num_bigint::BigInt;
 use smith::{Matrix, multiply, smith_normal_form};
 
 fn main() {
     let a: Matrix = vec![
-        vec![2, 4, 4],
-        vec![-6, 6, 12],
-        vec![10, -4, -16],
+        vec![BigInt::from(2), BigInt::from(4), BigInt::from(4)],
+        vec![BigInt::from(-6), BigInt::from(6), BigInt::from(12)],
+        vec![BigInt::from(10), BigInt::from(-4), BigInt::from(-16)],
     ];
 
     let snf = smith_normal_form(&a);
