@@ -400,6 +400,81 @@ mod tests {
     }
 
     #[test]
+    fn i64_boundary_and_arithmetic_overflow() {
+        let max_i64 = BigInt::from(i64::MAX);
+        let min_i64 = BigInt::from(i64::MIN);
+
+        // Matrix entries and operations (like subtraction and multiplication)
+        // that would immediately overflow standard signed 64-bit integer limits.
+        let a = vec![
+            vec![max_i64.clone(), &max_i64 * 2],
+            vec![min_i64.clone(), &max_i64 + 1],
+        ];
+        let snf = check(&a);
+        assert_eq!(snf.rank(), 2);
+    }
+
+    #[test]
+    fn extreme_magnitude_values_exceeding_i128() {
+        use std::str::FromStr;
+
+        // 50-digit integers far beyond 128-bit limits (~3.4e38)
+        let a1 = BigInt::from_str("12345678901234567890123456789012345678901234567890").unwrap();
+        let a2 = BigInt::from_str("98765432109876543210987654321098765432109876543210").unwrap();
+        let a3 = BigInt::from_str("11111111111111111111111111111111111111111111111111").unwrap();
+        let a4 = BigInt::from_str("55555555555555555555555555555555555555555555555555").unwrap();
+
+        let a = vec![
+            vec![a1, a2],
+            vec![a3, a4],
+        ];
+        let snf = check(&a);
+        assert_eq!(snf.rank(), 2);
+    }
+
+    #[test]
+    fn large_coprime_values_requiring_multi_step_euclidean_reduction() {
+        use std::str::FromStr;
+
+        // Large coprime values forcing multiple division-with-remainder reduction steps
+        // with large intermediate products and remainders.
+        let p = BigInt::from_str("10000000000000000000000000000000000000000000000019").unwrap();
+        let q = BigInt::from_str("10000000000000000000000000000000000000000000000003").unwrap();
+
+        // 1x2 matrix: computing gcd(p, q) = 1 via Euclidean reduction
+        let a = vec![vec![p.clone(), q.clone()]];
+        let snf = check(&a);
+        assert_eq!(snf.rank(), 1);
+        assert_eq!(snf.invariant_factors, vec![BigInt::one()]);
+
+        // 2x2 upper triangular matrix with determinant p
+        let b = vec![
+            vec![p.clone(), q],
+            vec![BigInt::zero(), BigInt::one()],
+        ];
+        let snf_b = check(&b);
+        assert_eq!(snf_b.rank(), 2);
+        assert_eq!(snf_b.invariant_factors, vec![BigInt::one(), p]);
+    }
+
+    #[test]
+    fn intermediate_growth_in_3x3_matrix() {
+        use std::str::FromStr;
+
+        let scale = BigInt::from_str("100000000000000000000").unwrap(); // 10^20
+        let a = vec![
+            vec![&scale * 1, &scale * 2, &scale * 3],
+            vec![&scale * 4, &scale * 5, &scale * 6],
+            vec![&scale * 7, &scale * 8, &scale * 10],
+        ];
+        let snf = check(&a);
+        assert_eq!(snf.rank(), 3);
+        assert_eq!(snf.invariant_factors[0], &scale * 1);
+        assert_eq!(snf.invariant_factors[1], &scale * 1);
+        assert_eq!(snf.invariant_factors[2], &scale * 3);
+    }
+
+    #[test]
     fn empty_matrix() {
         let snf = check(&[]);
         assert_eq!(snf.rows, 0);
